@@ -105,16 +105,16 @@ show_project_menu() {
   display_name=$(echo "$alias" | tr '[:lower:]' '[:upper:]')
 
   # Scan worktrees
-  declare -a wt_path=() wt_branch=() wt_dirty=() wt_subject=() wt_age=() wt_epoch=()
+  declare -a wt_path=() wt_branch=() wt_dirty=() wt_title=() wt_pr=() wt_epoch=()
 
-  while IFS='|' read -r type palias path branch dirty subject age epoch; do
+  while IFS='|' read -r type palias path branch dirty title pr epoch; do
     [ "$type" = "WT" ] || continue
     [ "$palias" = "$alias" ] || continue
     wt_path+=("$path")
     wt_branch+=("$branch")
     wt_dirty+=("$dirty")
-    wt_subject+=("$subject")
-    wt_age+=("$age")
+    wt_title+=("$title")
+    wt_pr+=("$pr")
     wt_epoch+=("$epoch")
   done < <(bash "$YOLO_DIR/yolo-scan.sh")
 
@@ -141,22 +141,21 @@ show_project_menu() {
   for pos in "${sorted[@]}"; do
     count=$((count + 1))
     local branch="${wt_branch[$pos]}"
-    local subject="${wt_subject[$pos]}"
-    local age="${wt_age[$pos]}"
-    local dirty="${wt_dirty[$pos]}"
+    local title="${wt_title[$pos]}"
+    local pr="${wt_pr[$pos]}"
 
-    [ ${#branch} -gt 33 ] && branch="${branch:0:30}..."
-    [ ${#subject} -gt 28 ] && subject="${subject:0:25}..."
+    [ ${#branch} -gt 30 ] && branch="${branch:0:27}..."
+    [ ${#title} -gt 40 ] && title="${title:0:37}..."
 
-    local status
-    if [ -n "$dirty" ]; then
-      status="${YELLOW}dirty${RESET}"
-    else
-      status="${DIM}clean${RESET}"
-    fi
+    local pr_display=""
+    case "$pr" in
+      open)   pr_display="${GREEN}PR${RESET}" ;;
+      draft)  pr_display="${YELLOW}Draft${RESET}" ;;
+      merged) pr_display="${DIM}Merged${RESET}" ;;
+    esac
 
-    printf "  ${CYAN}%2d)${RESET} %-35s %-28s %s  ${DIM}%s${RESET}\n" \
-      "$count" "$branch" "$subject" "$status" "($age)"
+    printf "  ${CYAN}%2d)${RESET} %-32s %-42s %s\n" \
+      "$count" "$branch" "$title" "$pr_display"
 
     pick_path+=("${wt_path[$pos]}")
   done
