@@ -288,8 +288,18 @@ while true; do
   done
   echo ""
 
+  printf "  ${DIM}Enter) Claude in current dir${RESET}\n"
+  echo ""
+
   printf "Pick: "
   read -r proj_choice
+
+  # Empty input → launch claude in current directory
+  if [ -z "$proj_choice" ]; then
+    printf "\nLaunching Claude in ${BOLD}%s${RESET}...\n" "$(pwd)"
+    claude --dangerously-skip-permissions "${EXTRA_ARGS[@]}"
+    exit $?
+  fi
 
   local_idx=-1
   if [[ "$proj_choice" =~ ^[0-9]+$ ]] && [ "$proj_choice" -ge 1 ] && [ "$proj_choice" -le "${#PROJ_ALIAS[@]}" ]; then
