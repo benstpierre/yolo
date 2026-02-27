@@ -4,12 +4,12 @@ YOLO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONF="$YOLO_DIR/projects.conf"
 
 # --- Colors ---
-BOLD='\033[1m'
-DIM='\033[2m'
-CYAN='\033[36m'
-GREEN='\033[32m'
-YELLOW='\033[33m'
-RESET='\033[0m'
+BOLD=$'\033[1m'
+DIM=$'\033[2m'
+CYAN=$'\033[36m'
+GREEN=$'\033[32m'
+YELLOW=$'\033[33m'
+RESET=$'\033[0m'
 
 # --- Load projects from conf ---
 declare -a PROJ_ALIAS=() PROJ_REPO=() PROJ_HOLDER=()
