@@ -100,6 +100,7 @@ show_project_menu() {
   shift 3
   # remaining args passed to claude
 
+  clear
   local bare="$holder/.repo"
   local display_name
   display_name=$(echo "$alias" | tr '[:lower:]' '[:upper:]')
@@ -254,6 +255,7 @@ fi
 
 # Level 1: Project picker (loops on back)
 while true; do
+  clear
   echo ""
   printf "${BOLD}PROJECTS${RESET}\n"
   echo ""
