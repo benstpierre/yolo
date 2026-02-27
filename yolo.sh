@@ -176,11 +176,16 @@ show_project_menu() {
   printf "> "
   read -r choice
 
-  case "$choice" in
-    b|B)
+  # Normalize: "remove 12" / "rm 12" / "delete 12" → "rm 12"
+  local normalized
+  normalized=$(echo "$choice" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
+  normalized=$(echo "$normalized" | sed 's/^remove[[:space:]]*/rm /; s/^delete[[:space:]]*/rm /; s/^rm[[:space:]]*/rm /')
+
+  case "$normalized" in
+    b)
       return 2  # signal to restart project picker
       ;;
-    t|T)
+    t)
       local tmp_branch="tmp-$(date +%Y%m%d-%H%M%S)"
       echo "Creating temp branch: $tmp_branch"
       git -C "$bare" fetch origin main:main 2>/dev/null
@@ -191,6 +196,25 @@ show_project_menu() {
         echo "Failed to create temp branch."
         return 1
       fi
+      ;;
+    rm\ *)
+      local del_num="${normalized#rm }"
+      if ! [[ "$del_num" =~ ^[0-9]+$ ]] || [ "$del_num" -lt 1 ] || [ "$del_num" -gt "$count" ]; then
+        echo "Invalid: pick 1-$count"
+        return 1
+      fi
+      local del_idx=$((del_num - 1))
+      local del_path="${pick_path[$del_idx]}"
+      local del_branch="${wt_branch[${sorted[$del_idx]}]}"
+
+      printf "Remove ${BOLD}%s${RESET}? [y/N]: " "$del_branch"
+      read -r confirm
+      if [[ "$confirm" =~ ^[yY]$ ]]; then
+        git -C "$bare" worktree remove "$del_path" --force 2>/dev/null || rm -rf "$del_path"
+        git -C "$bare" branch -D "$del_branch" 2>/dev/null || true
+      fi
+      # Re-render the menu
+      show_project_menu "$alias" "$repo" "$holder" "$@"
       ;;
     *)
       # Numbered pick
