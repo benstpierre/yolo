@@ -165,7 +165,6 @@ show_project_menu() {
   fi
 
   echo ""
-  printf "  ${GREEN} m)${RESET} Work on main\n"
   printf "  ${GREEN} t)${RESET} New temp branch\n"
   printf "  ${DIM} b)${RESET} Back\n"
   echo ""
@@ -179,20 +178,6 @@ show_project_menu() {
   case "$choice" in
     b|B)
       return 2  # signal to restart project picker
-      ;;
-    m|M)
-      git -C "$bare" fetch origin main:main 2>/dev/null
-      if [ -d "$holder/main" ]; then
-        launch "$holder/main" "$@"
-      else
-        git -C "$bare" worktree add "$holder/main" main 2>/dev/null
-        if [ -d "$holder/main" ]; then
-          launch "$holder/main" "$@"
-        else
-          echo "Failed to check out main."
-          return 1
-        fi
-      fi
       ;;
     t|T)
       local tmp_branch="tmp-$(date +%Y%m%d-%H%M%S)"
