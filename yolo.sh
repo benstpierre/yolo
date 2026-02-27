@@ -167,6 +167,7 @@ show_project_menu() {
   echo ""
   printf "  ${GREEN} m)${RESET} Work on main\n"
   printf "  ${GREEN} t)${RESET} New temp branch\n"
+  printf "  ${DIM} b)${RESET} Back\n"
   echo ""
   printf "  ${DIM}Or enter issue #, branch name, or GitHub URL${RESET}\n"
   echo ""
@@ -176,6 +177,9 @@ show_project_menu() {
   read -r choice
 
   case "$choice" in
+    b|B)
+      return 2  # signal to restart project picker
+      ;;
     m|M)
       git -C "$bare" fetch origin main:main 2>/dev/null
       if [ -d "$holder/main" ]; then
@@ -263,29 +267,38 @@ if [ -n "$ARG_ALIAS" ]; then
   done
 fi
 
-# Level 1: Project picker
-echo ""
-printf "${BOLD}PROJECTS${RESET}\n"
-echo ""
-for idx in "${!PROJ_ALIAS[@]}"; do
-  printf "  ${CYAN}%d)${RESET} %-6s ${DIM}%s${RESET}\n" $((idx + 1)) "${PROJ_ALIAS[$idx]}" "${PROJ_REPO[$idx]}"
-done
-echo ""
-
-printf "Pick: "
-read -r proj_choice
-
-if [[ "$proj_choice" =~ ^[0-9]+$ ]] && [ "$proj_choice" -ge 1 ] && [ "$proj_choice" -le "${#PROJ_ALIAS[@]}" ]; then
-  local_idx=$((proj_choice - 1))
-  show_project_menu "${PROJ_ALIAS[$local_idx]}" "${PROJ_REPO[$local_idx]}" "${PROJ_HOLDER[$local_idx]}" "${EXTRA_ARGS[@]}"
-else
-  # Check if they typed an alias
+# Level 1: Project picker (loops on back)
+while true; do
+  echo ""
+  printf "${BOLD}PROJECTS${RESET}\n"
+  echo ""
   for idx in "${!PROJ_ALIAS[@]}"; do
-    if [ "$proj_choice" = "${PROJ_ALIAS[$idx]}" ]; then
-      show_project_menu "${PROJ_ALIAS[$idx]}" "${PROJ_REPO[$idx]}" "${PROJ_HOLDER[$idx]}" "${EXTRA_ARGS[@]}"
-      exit $?
-    fi
+    printf "  ${CYAN}%d)${RESET} %-6s ${DIM}%s${RESET}\n" $((idx + 1)) "${PROJ_ALIAS[$idx]}" "${PROJ_REPO[$idx]}"
   done
-  echo "Invalid selection."
-  exit 1
-fi
+  echo ""
+
+  printf "Pick: "
+  read -r proj_choice
+
+  local_idx=-1
+  if [[ "$proj_choice" =~ ^[0-9]+$ ]] && [ "$proj_choice" -ge 1 ] && [ "$proj_choice" -le "${#PROJ_ALIAS[@]}" ]; then
+    local_idx=$((proj_choice - 1))
+  else
+    for idx in "${!PROJ_ALIAS[@]}"; do
+      if [ "$proj_choice" = "${PROJ_ALIAS[$idx]}" ]; then
+        local_idx=$idx
+        break
+      fi
+    done
+  fi
+
+  if [ "$local_idx" -ge 0 ] 2>/dev/null; then
+    show_project_menu "${PROJ_ALIAS[$local_idx]}" "${PROJ_REPO[$local_idx]}" "${PROJ_HOLDER[$local_idx]}" "${EXTRA_ARGS[@]}"
+    rc=$?
+    [ "$rc" -eq 2 ] && continue  # back was pressed
+    exit $rc
+  else
+    echo "Invalid selection."
+    exit 1
+  fi
+done
