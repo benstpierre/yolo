@@ -1,240 +1,292 @@
 #!/usr/bin/env bash
-set -euo pipefail
 
-# --- Config ---
 YOLO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONF="$YOLO_DIR/projects.conf"
 
-# Colors
+# --- Colors ---
 BOLD='\033[1m'
 DIM='\033[2m'
-GREEN='\033[32m'
 CYAN='\033[36m'
+GREEN='\033[32m'
 YELLOW='\033[33m'
-RED='\033[31m'
 RESET='\033[0m'
 
-# --- Read projects.conf ---
-declare -a P_ALIASES=()
-declare -a P_REPOS=()
-declare -a P_DIRS=()
+# --- Load projects from conf ---
+declare -a PROJ_ALIAS=() PROJ_REPO=() PROJ_HOLDER=()
 
-while IFS='|' read -r alias repo dir; do
-  [[ "$alias" =~ ^#.*$ || -z "$alias" ]] && continue
-  P_ALIASES+=("$alias")
-  P_REPOS+=("$repo")
-  P_DIRS+=("$dir")
+section=""
+while IFS= read -r line; do
+  [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+  if [[ "$line" =~ ^\[projects\] ]]; then section="projects"; continue; fi
+  if [[ "$line" =~ ^\[ ]]; then section=""; continue; fi
+
+  if [ "$section" = "projects" ]; then
+    IFS='|' read -r alias repo holder <<< "$line"
+    [ -z "$alias" ] && continue
+    PROJ_ALIAS+=("$alias")
+    PROJ_REPO+=("$repo")
+    PROJ_HOLDER+=("$holder")
+  fi
 done < "$CONF"
 
-# --- Resolve which project we're working with ---
-PROJECT_ALIAS=""
-PROJECT_REPO=""
-PROJECT_DIR=""
+# --- Helper: launch claude in a directory ---
+launch() {
+  local dir="$1"
+  shift
+  local branch
+  branch=$(git -C "$dir" branch --show-current 2>/dev/null || basename "$dir")
+  printf "\nLaunching Claude in ${BOLD}%s${RESET}...\n" "$branch"
+  cd "$dir" && claude --dangerously-skip-permissions "$@"
+}
+
+# --- Helper: resolve flexible input ---
+resolve_input() {
+  local input="$1" holder="$2" repo="$3" bare="$4"
+  shift 4
+
+  # Strip GitHub URL to extract issue # or branch name
+  if [[ "$input" =~ github\.com/.*/issues/([0-9]+) ]]; then
+    input="${BASH_REMATCH[1]}"
+  elif [[ "$input" =~ github\.com/.*/tree/(.+) ]]; then
+    input="${BASH_REMATCH[1]}"
+  fi
+
+  # Check existing worktrees for prefix match
+  for dir in "$holder"/*/; do
+    [ -e "$dir/.git" ] || continue
+    local name
+    name=$(basename "$dir")
+    [ "$name" = ".repo" ] && continue
+    if [[ "$name" == "$input"* ]]; then
+      launch "$dir" "$@"
+      return
+    fi
+  done
+
+  # Try as issue number
+  if [[ "$input" =~ ^[0-9]+$ ]]; then
+    local title
+    title=$(gh issue view "$input" --repo "$repo" --json title -q .title 2>/dev/null)
+    if [ -n "$title" ]; then
+      local slug branch
+      slug=$(echo "$title" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g; s/--*/-/g; s/^-//; s/-$//' | cut -c1-60 | sed 's/-$//')
+      branch="${input}-${slug}"
+      echo "Creating worktree for issue #${input}: ${title}"
+      git -C "$bare" fetch origin main:main 2>/dev/null
+      git -C "$bare" worktree add "$holder/$branch" -b "$branch" main
+      if [ -d "$holder/$branch" ]; then
+        launch "$holder/$branch" "$@"
+        return
+      fi
+    fi
+  fi
+
+  # Try as remote branch name
+  echo "Trying as remote branch: $input"
+  git -C "$bare" fetch origin "$input" 2>/dev/null
+  git -C "$bare" worktree add "$holder/$input" "$input" 2>/dev/null
+  if [ -d "$holder/$input" ]; then
+    launch "$holder/$input" "$@"
+    return
+  fi
+
+  echo "Could not resolve: $input"
+  return 1
+}
+
+# --- Helper: show project action menu ---
+show_project_menu() {
+  local alias="$1" repo="$2" holder="$3"
+  shift 3
+  # remaining args passed to claude
+
+  local bare="$holder/.repo"
+  local display_name
+  display_name=$(echo "$alias" | tr '[:lower:]' '[:upper:]')
+
+  # Scan worktrees
+  declare -a wt_path=() wt_branch=() wt_dirty=() wt_subject=() wt_age=() wt_epoch=()
+
+  while IFS='|' read -r type palias path branch dirty subject age epoch; do
+    [ "$type" = "WT" ] || continue
+    [ "$palias" = "$alias" ] || continue
+    wt_path+=("$path")
+    wt_branch+=("$branch")
+    wt_dirty+=("$dirty")
+    wt_subject+=("$subject")
+    wt_age+=("$age")
+    wt_epoch+=("$epoch")
+  done < <(bash "$YOLO_DIR/yolo-scan.sh")
+
+  # Sort by epoch (newest first)
+  declare -a sorted=()
+  if [ ${#wt_epoch[@]} -gt 0 ]; then
+    while read -r i; do
+      sorted+=("$i")
+    done < <(
+      for idx in "${!wt_epoch[@]}"; do
+        echo "${wt_epoch[$idx]} $idx"
+      done | sort -rn | awk '{print $2}'
+    )
+  fi
+
+  # Display
+  echo ""
+  printf "${BOLD}%s${RESET}  ${DIM}%s${RESET}\n" "$display_name" "$repo"
+  echo ""
+
+  local count=0
+  declare -a pick_path=()
+
+  for pos in "${sorted[@]}"; do
+    count=$((count + 1))
+    local branch="${wt_branch[$pos]}"
+    local subject="${wt_subject[$pos]}"
+    local age="${wt_age[$pos]}"
+    local dirty="${wt_dirty[$pos]}"
+
+    [ ${#branch} -gt 33 ] && branch="${branch:0:30}..."
+    [ ${#subject} -gt 28 ] && subject="${subject:0:25}..."
+
+    local status
+    if [ -n "$dirty" ]; then
+      status="${YELLOW}dirty${RESET}"
+    else
+      status="${DIM}clean${RESET}"
+    fi
+
+    printf "  ${CYAN}%2d)${RESET} %-35s %-28s %s  ${DIM}%s${RESET}\n" \
+      "$count" "$branch" "$subject" "$status" "($age)"
+
+    pick_path+=("${wt_path[$pos]}")
+  done
+
+  if [ "$count" -eq 0 ]; then
+    printf "  ${DIM}No worktrees found.${RESET}\n"
+  fi
+
+  echo ""
+  printf "  ${GREEN} m)${RESET} Work on main\n"
+  printf "  ${GREEN} t)${RESET} New temp branch\n"
+  echo ""
+  printf "  ${DIM}Or enter issue #, branch name, or GitHub URL${RESET}\n"
+  echo ""
+
+  # Prompt
+  printf "> "
+  read -r choice
+
+  case "$choice" in
+    m|M)
+      git -C "$bare" fetch origin main:main 2>/dev/null
+      if [ -d "$holder/main" ]; then
+        launch "$holder/main" "$@"
+      else
+        git -C "$bare" worktree add "$holder/main" main 2>/dev/null
+        if [ -d "$holder/main" ]; then
+          launch "$holder/main" "$@"
+        else
+          echo "Failed to check out main."
+          return 1
+        fi
+      fi
+      ;;
+    t|T)
+      local tmp_branch="tmp-$(date +%Y%m%d-%H%M%S)"
+      echo "Creating temp branch: $tmp_branch"
+      git -C "$bare" fetch origin main:main 2>/dev/null
+      git -C "$bare" worktree add "$holder/$tmp_branch" -b "$tmp_branch" main
+      if [ -d "$holder/$tmp_branch" ]; then
+        launch "$holder/$tmp_branch" "$@"
+      else
+        echo "Failed to create temp branch."
+        return 1
+      fi
+      ;;
+    *)
+      # Numbered pick
+      if [[ "$choice" =~ ^[0-9]+$ ]] && [ "$choice" -ge 1 ] && [ "$choice" -le "$count" ]; then
+        local pick=$((choice - 1))
+        launch "${pick_path[$pick]}" "$@"
+      elif [ -n "$choice" ]; then
+        # Smart resolve
+        resolve_input "$choice" "$holder" "$repo" "$bare" "$@"
+      else
+        echo "No selection."
+        return 1
+      fi
+      ;;
+  esac
+}
+
+# --- Main ---
+
+# Parse args: yolo [alias] [input]
+ARG_ALIAS=""
+ARG_INPUT=""
+EXTRA_ARGS=()
 
 if [ $# -ge 1 ]; then
-  # Alias provided as argument
-  for idx in "${!P_ALIASES[@]}"; do
-    if [ "${P_ALIASES[$idx]}" = "$1" ]; then
-      PROJECT_ALIAS="${P_ALIASES[$idx]}"
-      PROJECT_REPO="${P_REPOS[$idx]}"
-      PROJECT_DIR="${P_DIRS[$idx]}"
+  # Check if first arg is a known project alias
+  for idx in "${!PROJ_ALIAS[@]}"; do
+    if [ "$1" = "${PROJ_ALIAS[$idx]}" ]; then
+      ARG_ALIAS="$1"
       shift
       break
     fi
   done
+fi
 
-  if [ -z "$PROJECT_ALIAS" ]; then
-    printf "${RED}Unknown project: %s${RESET}\n" "$1"
-    printf "Known projects: %s\n" "${P_ALIASES[*]}"
-    return 2>/dev/null || exit 1
-  fi
-else
-  # No args — show project picker
-  echo ""
-  printf "${BOLD}yolo — pick a project${RESET}\n"
-  echo ""
+if [ -n "$ARG_ALIAS" ] && [ $# -ge 1 ]; then
+  ARG_INPUT="$1"
+  shift
+fi
 
-  for idx in "${!P_ALIASES[@]}"; do
-    num=$((idx + 1))
-    printf "  ${CYAN}%d)${RESET} ${BOLD}%s${RESET}  ${DIM}%s${RESET}\n" "$num" "${P_ALIASES[$idx]}" "${P_REPOS[$idx]}"
+EXTRA_ARGS=("$@")
+
+# If alias + input given, skip all menus and resolve directly
+if [ -n "$ARG_ALIAS" ] && [ -n "$ARG_INPUT" ]; then
+  for idx in "${!PROJ_ALIAS[@]}"; do
+    if [ "$ARG_ALIAS" = "${PROJ_ALIAS[$idx]}" ]; then
+      resolve_input "$ARG_INPUT" "${PROJ_HOLDER[$idx]}" "${PROJ_REPO[$idx]}" "${PROJ_HOLDER[$idx]}/.repo" "${EXTRA_ARGS[@]}"
+      exit $?
+    fi
   done
-
-  echo ""
-  printf "Pick [1-%d]: " "${#P_ALIASES[@]}"
-  read -r proj_choice
-
-  if ! [[ "$proj_choice" =~ ^[0-9]+$ ]] || [ "$proj_choice" -lt 1 ] || [ "$proj_choice" -gt "${#P_ALIASES[@]}" ]; then
-    echo "Invalid selection."
-    return 2>/dev/null || exit 1
-  fi
-
-  pick=$((proj_choice - 1))
-  PROJECT_ALIAS="${P_ALIASES[$pick]}"
-  PROJECT_REPO="${P_REPOS[$pick]}"
-  PROJECT_DIR="${P_DIRS[$pick]}"
 fi
 
-# --- First-time setup: bare clone if needed ---
-BARE_REPO="$PROJECT_DIR/.repo"
-
-if [ ! -d "$PROJECT_DIR" ]; then
-  printf "Creating holder directory: ${BOLD}%s${RESET}\n" "$PROJECT_DIR"
-  mkdir -p "$PROJECT_DIR"
+# If alias given (no input), skip project picker
+if [ -n "$ARG_ALIAS" ]; then
+  for idx in "${!PROJ_ALIAS[@]}"; do
+    if [ "$ARG_ALIAS" = "${PROJ_ALIAS[$idx]}" ]; then
+      show_project_menu "${PROJ_ALIAS[$idx]}" "${PROJ_REPO[$idx]}" "${PROJ_HOLDER[$idx]}" "${EXTRA_ARGS[@]}"
+      exit $?
+    fi
+  done
 fi
 
-if [ ! -d "$BARE_REPO" ]; then
-  printf "First run for ${BOLD}%s${RESET} — cloning bare repo...\n" "$PROJECT_ALIAS"
-  git clone --bare "https://github.com/${PROJECT_REPO}.git" "$BARE_REPO"
-fi
-
-# --- Collect worktrees sorted by most recent commit ---
-declare -a WT_DIRS=()
-declare -a WT_NAMES=()
-declare -a WT_TIMES=()
-declare -a WT_AGES=()
-
-for dir in "$PROJECT_DIR"/*/; do
-  [ -e "$dir/.git" ] || continue
-  name=$(basename "$dir")
-  # epoch of most recent commit
-  epoch=$(git -C "$dir" log -1 --format='%ct' 2>/dev/null || echo "0")
-  age=$(git -C "$dir" log -1 --format='%cr' 2>/dev/null || echo "unknown")
-  WT_DIRS+=("$dir")
-  WT_NAMES+=("$name")
-  WT_TIMES+=("$epoch")
-  WT_AGES+=("$age")
+# Level 1: Project picker
+echo ""
+printf "${BOLD}PROJECTS${RESET}\n"
+echo ""
+for idx in "${!PROJ_ALIAS[@]}"; do
+  printf "  ${CYAN}%d)${RESET} %-6s ${DIM}%s${RESET}\n" $((idx + 1)) "${PROJ_ALIAS[$idx]}" "${PROJ_REPO[$idx]}"
 done
-
-# Sort by commit time (newest first)
-if [ ${#WT_DIRS[@]} -gt 0 ]; then
-  # Build sortable lines, sort, then re-read
-  declare -a SORTED_INDICES=()
-  sorted=$(
-    for idx in "${!WT_TIMES[@]}"; do
-      echo "${WT_TIMES[$idx]} $idx"
-    done | sort -rn | awk '{print $2}'
-  )
-  while read -r i; do
-    SORTED_INDICES+=("$i")
-  done <<< "$sorted"
-fi
-
-# --- Display menu ---
-echo ""
-printf "${BOLD}🚀 %s${RESET}  ${DIM}(%s)${RESET}\n" "$PROJECT_ALIAS" "$PROJECT_REPO"
 echo ""
 
-if [ ${#WT_DIRS[@]} -eq 0 ]; then
-  printf "  ${DIM}No branches yet. Use 'i' to create one from a GitHub issue.${RESET}\n"
+printf "Pick: "
+read -r proj_choice
+
+if [[ "$proj_choice" =~ ^[0-9]+$ ]] && [ "$proj_choice" -ge 1 ] && [ "$proj_choice" -le "${#PROJ_ALIAS[@]}" ]; then
+  local_idx=$((proj_choice - 1))
+  show_project_menu "${PROJ_ALIAS[$local_idx]}" "${PROJ_REPO[$local_idx]}" "${PROJ_HOLDER[$local_idx]}" "${EXTRA_ARGS[@]}"
 else
-  for pos in "${!SORTED_INDICES[@]}"; do
-    idx="${SORTED_INDICES[$pos]}"
-    num=$((pos + 1))
-    printf "  ${CYAN}%d)${RESET} %-50s ${DIM}%s${RESET}\n" "$num" "${WT_NAMES[$idx]}" "${WT_AGES[$idx]}"
+  # Check if they typed an alias
+  for idx in "${!PROJ_ALIAS[@]}"; do
+    if [ "$proj_choice" = "${PROJ_ALIAS[$idx]}" ]; then
+      show_project_menu "${PROJ_ALIAS[$idx]}" "${PROJ_REPO[$idx]}" "${PROJ_HOLDER[$idx]}" "${EXTRA_ARGS[@]}"
+      exit $?
+    fi
   done
+  echo "Invalid selection."
+  exit 1
 fi
-
-echo ""
-printf "  ${GREEN}i)${RESET} New branch from GitHub issue\n"
-printf "  ${RED}d)${RESET} Delete a branch\n"
-echo ""
-
-# --- Prompt ---
-max=${#WT_DIRS[@]}
-if [ "$max" -gt 0 ]; then
-  printf "Pick [1-%d, i, d]: " "$max"
-else
-  printf "Pick [i, d]: "
-fi
-read -r choice
-
-case "$choice" in
-  # --- New branch from GitHub issue ---
-  i|I)
-    printf "Issue number: "
-    read -r issue_num
-
-    if [ -z "$issue_num" ]; then
-      echo "No issue number provided."
-      return 2>/dev/null || exit 1
-    fi
-
-    printf "Fetching issue #%s... " "$issue_num"
-    title=$(gh issue view "$issue_num" --repo "$PROJECT_REPO" --json title -q .title 2>/dev/null)
-
-    if [ -z "$title" ]; then
-      printf "\n${RED}Could not fetch issue #%s${RESET}\n" "$issue_num"
-      return 2>/dev/null || exit 1
-    fi
-
-    printf "\"${BOLD}%s${RESET}\"\n" "$title"
-
-    # Slugify: lowercase, replace non-alphanum with dash, collapse, trim
-    slug=$(echo "$title" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g; s/--*/-/g; s/^-//; s/-$//')
-    slug=$(echo "$slug" | cut -c1-60 | sed 's/-$//')
-    branch_name="${issue_num}-${slug}"
-
-    echo ""
-    printf "Creating branch: ${BOLD}%s${RESET}\n" "$branch_name"
-
-    # Fetch latest main
-    git -C "$BARE_REPO" fetch origin main:main 2>/dev/null
-
-    # Create worktree
-    git -C "$BARE_REPO" worktree add "$PROJECT_DIR/$branch_name" -b "$branch_name" main
-
-    printf "${GREEN}Done ✓${RESET}\n\n"
-    printf "Launching Claude in ${BOLD}%s/${RESET}...\n" "$branch_name"
-    cd "$PROJECT_DIR/$branch_name"
-    claude --dangerously-skip-permissions "$@"
-    ;;
-
-  # --- Delete a branch ---
-  d|D)
-    if [ "$max" -eq 0 ]; then
-      echo "No branches to delete."
-      return 2>/dev/null || exit 1
-    fi
-
-    printf "Delete which branch? [1-%d]: " "$max"
-    read -r del_choice
-
-    if ! [[ "$del_choice" =~ ^[0-9]+$ ]] || [ "$del_choice" -lt 1 ] || [ "$del_choice" -gt "$max" ]; then
-      echo "Invalid selection."
-      return 2>/dev/null || exit 1
-    fi
-
-    del_pos=$((del_choice - 1))
-    del_idx="${SORTED_INDICES[$del_pos]}"
-    del_dir="${WT_DIRS[$del_idx]}"
-    del_name="${WT_NAMES[$del_idx]}"
-
-    printf "Remove ${BOLD}%s${RESET}? [y/N]: " "$del_name"
-    read -r confirm
-
-    if [[ "$confirm" =~ ^[yY]$ ]]; then
-      git -C "$BARE_REPO" worktree remove "$del_dir" --force 2>/dev/null || rm -rf "$del_dir"
-      git -C "$BARE_REPO" branch -D "$del_name" 2>/dev/null || true
-      printf "${GREEN}Removed ✓${RESET}\n"
-    else
-      echo "Cancelled."
-    fi
-    ;;
-
-  # --- Pick an existing worktree ---
-  *)
-    if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "$max" ]; then
-      echo "Invalid selection."
-      return 2>/dev/null || exit 1
-    fi
-
-    pick_pos=$((choice - 1))
-    pick_idx="${SORTED_INDICES[$pick_pos]}"
-    pick_dir="${WT_DIRS[$pick_idx]}"
-    pick_name="${WT_NAMES[$pick_idx]}"
-
-    printf "\nLaunching Claude in ${BOLD}%s/${RESET}...\n" "$pick_name"
-    cd "$pick_dir"
-    claude --dangerously-skip-permissions "$@"
-    ;;
-esac

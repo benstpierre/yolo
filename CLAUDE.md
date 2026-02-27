@@ -1,50 +1,54 @@
-# yolo
+# yolo — worktree launcher
 
-A terminal launcher for managing multi-project worktrees with Claude Code.
-
-## What this is
-
-`yolo` is a bash script that manages git bare-repo worktrees across multiple projects. It provides a TUI menu to:
-- Pick a project (from `projects.conf`)
-- Pick a branch/worktree (sorted by most recent commit)
-- Create a new worktree from a GitHub issue
-- Delete old worktrees
-- Launch `claude --dangerously-skip-permissions` in the selected worktree
-
-## Files
-
-| File | Purpose |
-|------|---------|
-| `yolo.sh` | Main script — sourced by the bash_profile `yolo()` function |
-| `projects.conf` | Project registry: `alias\|github_repo\|holder_dir` per line |
-| `CLAUDE.md` | This file |
-| `README.md` | User-facing docs |
+A bash-driven workspace launcher for multi-project worktree workflows. It provides a two-level menu (project picker → project action menu) and smart input resolution.
 
 ## How it works
 
-Each project has a **holder directory** containing:
-- `.repo/` — a bare git clone
-- `branch-name/` — worktrees created from the bare clone
+- `yolo` → project picker → project action menu
+- `yolo wc` → skip picker, straight to wc's action menu
+- `yolo wc 9958` → skip both menus, resolve `9958` in wc context
 
-The script reads `projects.conf` to know which projects exist and where they live.
+The action menu shows existing worktrees and accepts:
+- **Number** → open that worktree
+- **`t`** → create temp branch from main
+- **Issue number** (e.g. `9958`) → find matching worktree or create from GitHub issue
+- **GitHub URL** → extract issue # or branch name and resolve
 
-## Usage
+## Config
 
+`projects.conf` has one section:
+
+```
+[projects]
+alias|github_repo|holder_dir
+```
+
+## Holder directory structure
+
+Each project's `holder_dir` contains:
+- `.repo/` — bare git clone
+- `<branch-name>/` — worktrees checked out from the bare clone
+
+### First-time setup
+
+If a project's `holder_dir` doesn't exist, create it and clone:
 ```bash
-yolo          # project picker → branch picker → claude
-yolo wc       # jump straight to waste-coordinator branches
-yolo pg       # jump straight to planglobal branches
+mkdir -p <holder_dir>
+git clone --bare https://github.com/<github_repo>.git <holder_dir>/.repo
 ```
 
-## Adding a project
+## Session notes
 
-Edit `projects.conf` and add a line:
+Before ending a session, write `.claude-session` in the worktree root:
+
 ```
-alias|github_org/repo_name|/path/to/holder/dir
+Last: <1-line summary>
+Next: <what should happen next>
+Updated: <YYYY-MM-DD>
 ```
 
-## Conventions
+On entering a worktree, read this file and greet with context.
 
-- Keep `yolo.sh` compatible with bash 3.2+ (macOS default) and bash 5+
-- The script is `source`d (not executed) so `cd` affects the caller's shell
-- Use `return` for early exits (not `exit`) since it runs in the caller's shell
+## Build safety
+
+NEVER run `./gradlew build` or `./gradlew webapp:startWebapp` in two worktrees of the same project simultaneously — embedded Postgres and webapp ports will conflict.
