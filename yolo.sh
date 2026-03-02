@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# NOTE: This script is sourced, not executed. Do NOT use set -e/-u/-o pipefail
+# as they would affect the caller's shell and crash the terminal on any failure.
 
 # --- Config ---
 YOLO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -125,7 +126,7 @@ printf "${BOLD}🚀 %s${RESET}  ${DIM}(%s)${RESET}\n" "$PROJECT_ALIAS" "$PROJECT
 echo ""
 
 if [ ${#WT_DIRS[@]} -eq 0 ]; then
-  printf "  ${DIM}No branches yet. Use 'i' to create one from a GitHub issue.${RESET}\n"
+  printf "  ${DIM}No branches yet. Type an issue number to get started.${RESET}\n"
 else
   for pos in "${!SORTED_INDICES[@]}"; do
     idx="${SORTED_INDICES[$pos]}"
@@ -136,75 +137,57 @@ fi
 
 echo ""
 printf "  ${GREEN}i)${RESET} New branch from GitHub issue\n"
-printf "  ${RED}d)${RESET} Delete a branch\n"
+printf "  ${RED}rm)${RESET} Remove a branch\n"
 echo ""
 
 # --- Prompt ---
 max=${#WT_DIRS[@]}
 if [ "$max" -gt 0 ]; then
-  printf "Pick [1-%d, i, d]: " "$max"
+  printf "Pick [1-%d], issue #, or rm: " "$max"
 else
-  printf "Pick [i, d]: "
+  printf "Pick issue # or i: "
 fi
 read -r choice
 
+# Normalize whitespace and lowercase
+choice=$(echo "$choice" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
+# Strip leading # (e.g. "#9999" → "9999")
+choice="${choice#\#}"
+# "remove 12" / "rm 12" / "delete 12" → "rm12"
+choice=$(echo "$choice" | sed 's/^remove[[:space:]]*/rm/; s/^delete[[:space:]]*/rm/; s/^rm[[:space:]]*/rm/')
+
+# --- "i" means prompt for issue number, then treat same as typing the number ---
+if [ "$choice" = "i" ]; then
+  printf "Issue number: "
+  read -r choice
+  if [ -z "$choice" ]; then
+    echo "No issue number provided."
+    return 2>/dev/null || exit 1
+  fi
+fi
+
 case "$choice" in
-  # --- New branch from GitHub issue ---
-  i|I)
-    printf "Issue number: "
-    read -r issue_num
-
-    if [ -z "$issue_num" ]; then
-      echo "No issue number provided."
-      return 2>/dev/null || exit 1
-    fi
-
-    printf "Fetching issue #%s... " "$issue_num"
-    title=$(gh issue view "$issue_num" --repo "$PROJECT_REPO" --json title -q .title 2>/dev/null)
-
-    if [ -z "$title" ]; then
-      printf "\n${RED}Could not fetch issue #%s${RESET}\n" "$issue_num"
-      return 2>/dev/null || exit 1
-    fi
-
-    printf "\"${BOLD}%s${RESET}\"\n" "$title"
-
-    # Slugify: lowercase, replace non-alphanum with dash, collapse, trim
-    slug=$(echo "$title" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g; s/--*/-/g; s/^-//; s/-$//')
-    slug=$(echo "$slug" | cut -c1-60 | sed 's/-$//')
-    branch_name="${issue_num}-${slug}"
-
-    echo ""
-    printf "Creating branch: ${BOLD}%s${RESET}\n" "$branch_name"
-
-    # Fetch latest main
-    git -C "$BARE_REPO" fetch origin main:main 2>/dev/null
-
-    # Create worktree
-    git -C "$BARE_REPO" worktree add "$PROJECT_DIR/$branch_name" -b "$branch_name" main
-
-    printf "${GREEN}Done ✓${RESET}\n\n"
-    printf "Launching Claude in ${BOLD}%s/${RESET}...\n" "$branch_name"
-    cd "$PROJECT_DIR/$branch_name"
-    claude --dangerously-skip-permissions "$@"
-    ;;
-
-  # --- Delete a branch ---
-  d|D)
+  # --- Remove a branch (rm, rm5, remove 12, delete 3, etc.) ---
+  rm*)
     if [ "$max" -eq 0 ]; then
       echo "No branches to delete."
       return 2>/dev/null || exit 1
     fi
 
-    printf "Delete which branch? [1-%d]: " "$max"
-    read -r del_choice
+    del_num="${choice#rm}"
 
-    if ! [[ "$del_choice" =~ ^[0-9]+$ ]] || [ "$del_choice" -lt 1 ] || [ "$del_choice" -gt "$max" ]; then
+    if [ -z "$del_num" ]; then
+      # Bare "rm" — ask which one
+      printf "Remove which branch? [1-%d]: " "$max"
+      read -r del_num
+    fi
+
+    if ! [[ "$del_num" =~ ^[0-9]+$ ]] || [ "$del_num" -lt 1 ] || [ "$del_num" -gt "$max" ]; then
       echo "Invalid selection."
       return 2>/dev/null || exit 1
     fi
 
-    del_pos=$((del_choice - 1))
+    del_pos=$((del_num - 1))
     del_idx="${SORTED_INDICES[$del_pos]}"
     del_dir="${WT_DIRS[$del_idx]}"
     del_name="${WT_NAMES[$del_idx]}"
@@ -221,20 +204,95 @@ case "$choice" in
     fi
     ;;
 
-  # --- Pick an existing worktree ---
+  # --- Number: menu pick, existing worktree match, or new issue ---
   *)
-    if ! [[ "$choice" =~ ^[0-9]+$ ]] || [ "$choice" -lt 1 ] || [ "$choice" -gt "$max" ]; then
+    if ! [[ "$choice" =~ ^[0-9]+$ ]]; then
       echo "Invalid selection."
       return 2>/dev/null || exit 1
     fi
 
-    pick_pos=$((choice - 1))
-    pick_idx="${SORTED_INDICES[$pick_pos]}"
-    pick_dir="${WT_DIRS[$pick_idx]}"
-    pick_name="${WT_NAMES[$pick_idx]}"
+    # 1) If it's a valid menu pick (1..max), use it
+    if [ "$max" -gt 0 ] && [ "$choice" -ge 1 ] && [ "$choice" -le "$max" ]; then
+      pick_pos=$((choice - 1))
+      pick_idx="${SORTED_INDICES[$pick_pos]}"
+      printf "\nLaunching Claude in ${BOLD}%s/${RESET}...\n" "${WT_NAMES[$pick_idx]}"
+      cd "${WT_DIRS[$pick_idx]}"
+      claude --dangerously-skip-permissions "$@"
+      return 2>/dev/null || exit 0
+    fi
 
-    printf "\nLaunching Claude in ${BOLD}%s/${RESET}...\n" "$pick_name"
-    cd "$pick_dir"
+    # 2) Check if an existing worktree starts with this number
+    _found_idx=""
+    for _i in "${!WT_NAMES[@]}"; do
+      case "${WT_NAMES[$_i]}" in
+        "${choice}"-*|"${choice}")
+          _found_idx="$_i"
+          break
+          ;;
+      esac
+    done
+
+    if [ -n "$_found_idx" ]; then
+      printf "\nFound existing branch: ${BOLD}%s${RESET}\n" "${WT_NAMES[$_found_idx]}"
+      printf "Launching Claude in ${BOLD}%s/${RESET}...\n" "${WT_NAMES[$_found_idx]}"
+      cd "${WT_DIRS[$_found_idx]}"
+      claude --dangerously-skip-permissions "$@"
+      return 2>/dev/null || exit 0
+    fi
+
+    # 3) No existing worktree — check if branch already exists in bare repo
+    _existing_branch=$(git -C "$BARE_REPO" for-each-ref --format='%(refname:short)' "refs/heads/${choice}-*" "refs/heads/${choice}" 2>/dev/null | head -1)
+
+    if [ -n "$_existing_branch" ]; then
+      # Branch exists in bare repo but no worktree — create worktree from it
+      printf "\nFound existing branch: ${BOLD}%s${RESET}\n" "$_existing_branch"
+      printf "Creating worktree...\n"
+      git -C "$BARE_REPO" worktree add "$PROJECT_DIR/$_existing_branch" "$_existing_branch" || {
+        printf "${RED}Failed to create worktree${RESET}\n"
+        return 2>/dev/null || exit 1
+      }
+      printf "${GREEN}Done ✓${RESET}\n\n"
+      printf "Launching Claude in ${BOLD}%s/${RESET}...\n" "$_existing_branch"
+      cd "$PROJECT_DIR/$_existing_branch"
+      claude --dangerously-skip-permissions "$@"
+      return 2>/dev/null || exit 0
+    fi
+
+    # 4) No branch at all — fetch GitHub issue and create new branch
+    printf "Fetching issue #%s... " "$choice"
+    _title=$(gh issue view "$choice" --repo "$PROJECT_REPO" --json title -q .title 2>/dev/null) || true
+
+    if [ -z "$_title" ]; then
+      printf "\n${RED}Could not fetch issue #%s from %s${RESET}\n" "$choice" "$PROJECT_REPO"
+      return 2>/dev/null || exit 1
+    fi
+
+    printf "\"${BOLD}%s${RESET}\"\n" "$_title"
+
+    # Slugify: lowercase, replace non-alphanum with dash, collapse, trim
+    _slug=$(echo "$_title" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9]/-/g; s/--*/-/g; s/^-//; s/-$//')
+    _slug=$(echo "$_slug" | cut -c1-60 | sed 's/-$//')
+    _branch="${choice}-${_slug}"
+
+    echo ""
+    printf "Creating branch: ${BOLD}%s${RESET}\n" "$_branch"
+
+    # Fetch latest default branch
+    _default=$(git -C "$BARE_REPO" remote show origin 2>/dev/null | sed -n 's/.*HEAD branch: //p')
+    _default="${_default:-main}"
+    git -C "$BARE_REPO" fetch origin "$_default:$_default" || {
+      printf "\n${RED}Failed to fetch origin/%s${RESET}\n" "$_default"
+      return 2>/dev/null || exit 1
+    }
+
+    git -C "$BARE_REPO" worktree add "$PROJECT_DIR/$_branch" -b "$_branch" "$_default" || {
+      printf "\n${RED}Failed to create worktree${RESET}\n"
+      return 2>/dev/null || exit 1
+    }
+
+    printf "${GREEN}Done ✓${RESET}\n\n"
+    printf "Launching Claude in ${BOLD}%s/${RESET}...\n" "$_branch"
+    cd "$PROJECT_DIR/$_branch"
     claude --dangerously-skip-permissions "$@"
     ;;
 esac
