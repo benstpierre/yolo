@@ -61,8 +61,14 @@ else
   done
 
   echo ""
-  printf "Pick [1-%d]: " "${#P_ALIASES[@]}"
+  printf "Pick [1-%d] or Enter for pwd: " "${#P_ALIASES[@]}"
   read -r proj_choice
+
+  if [ -z "$proj_choice" ]; then
+    printf "\nLaunching Claude in ${BOLD}%s${RESET}...\n" "$(pwd)"
+    claude --dangerously-skip-permissions "$@"
+    return 2>/dev/null || exit 0
+  fi
 
   if ! [[ "$proj_choice" =~ ^[0-9]+$ ]] || [ "$proj_choice" -lt 1 ] || [ "$proj_choice" -gt "${#P_ALIASES[@]}" ]; then
     echo "Invalid selection."
