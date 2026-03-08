@@ -1,3 +1,7 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
 # yolo2
 
 You are the yolo2 workspace manager. You help the user manage git worktrees across multiple projects.
@@ -105,3 +109,37 @@ git clone --bare https://github.com/<repo>.git <holder_dir>/.repo
 - Always `fetch` before creating worktrees
 - Worktrees are directories inside the holder dir that contain a `.git` file
 - NEVER run `./gradlew build` or `./gradlew webapp:startWebapp` in two worktrees simultaneously — port conflicts
+
+---
+
+## Codebase Notes (for Claude Code working on yolo2 itself)
+
+### What's here
+- `yolo2.sh` — the entire launcher. One bash script, ~120 lines, no dependencies beyond `git`, `gh`, and `claude` CLI.
+- `yolo.sh` — old TUI launcher, kept for reference. Ignore it.
+- `projects.conf` — the only config file. Format: `alias|github_repo|holder_dir`. Edit this to add/remove projects.
+
+### How yolo2.sh works
+1. Reads `projects.conf` into parallel arrays
+2. If an alias is passed as arg, skips the project picker
+3. Iterates `$PROJECT_DIR/*/` looking for directories with a `.git` file (worktrees), skipping `.repo/`
+4. Sorts worktrees by last commit epoch (newest first), prints the list
+5. Builds a `SNAPSHOT` string with all worktree metadata
+6. Launches `claude` with `--append-system-prompt` containing the snapshot so Claude sees the context without reprinting it
+
+### The bare repo pattern
+Projects use `<holder_dir>/.repo` as a bare clone. Worktrees live directly inside the holder dir as `<holder_dir>/<branch-name>/`. All `git worktree` commands must target `.repo`, not a worktree. Remote tracking refs for feature branches don't exist in bare repos — always diff against `origin/main`, not `origin/<branch>`.
+
+### Adding a project
+1. Add a line to `projects.conf`
+2. Create the holder dir and bare clone:
+   ```bash
+   mkdir -p <holder_dir>
+   git clone --bare https://github.com/<org>/<repo>.git <holder_dir>/.repo
+   ```
+
+### Shell function (user's ~/.bash_profile)
+```bash
+yolo2() { source "/usr/local/code/claude-native/yolo-holder/main/yolo2.sh" "$@"; }
+```
+Must be `source`d (not executed) because it calls `cd` to change the user's working directory.
