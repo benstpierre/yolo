@@ -1,8 +1,13 @@
 #!/usr/bin/env bash
-# yolo2 — bash picks project + shows branches, Claude handles everything after.
+# yolo2 — jump to a project worktree and launch Claude there.
 #
 # Add to ~/.bash_profile:
 #   yolo2() { source "/usr/local/code/claude-native/yolo-holder/main/yolo2.sh" "$@"; }
+#
+# Usage:
+#   yolo2              → pick project, then pick branch
+#   yolo2 sfc          → pick branch in sfc
+#   yolo2 sfc main     → jump directly to sfc/main
 
 YOLO2_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONF="$YOLO2_DIR/projects.conf"
@@ -68,12 +73,12 @@ else
 fi
 
 # --- Gather worktrees for this project ---
-SNAPSHOT="PROJECT: ${PROJECT_ALIAS} | ${PROJECT_REPO} | ${PROJECT_DIR}"
 declare -a ROW_EPOCH=()
 declare -a ROW_NAME=()
 declare -a ROW_MSG=()
 declare -a ROW_AGE=()
 declare -a ROW_STATUS=()
+declare -a ROW_PATH=()
 
 if [ -d "$PROJECT_DIR" ]; then
   for wt in "$PROJECT_DIR"/*/; do
@@ -90,32 +95,87 @@ if [ -d "$PROJECT_DIR" ]; then
     ROW_MSG+=("$msg")
     ROW_AGE+=("$age")
     ROW_STATUS+=("$s")
+    ROW_PATH+=("$wt")
   done
 fi
 
-# --- Print branch list (sorted by recency) and build snapshot in same order ---
-echo ""
-printf "${BOLD}${PROJECT_ALIAS}${RESET}  ${DIM}${PROJECT_REPO}${RESET}\n"
-echo ""
+# --- Build sorted index ---
+declare -a SORTED_NAMES=()
+declare -a SORTED_PATHS=()
+declare -a SORTED_AGES=()
+declare -a SORTED_STATUSES=()
 
-if [ ${#ROW_EPOCH[@]} -eq 0 ]; then
-  printf "  ${DIM}No branches yet.${RESET}\n"
-else
-  sorted=$(for i in "${!ROW_EPOCH[@]}"; do echo "${ROW_EPOCH[$i]} $i"; done | sort -rn | awk '{print $2}')
-  num=1
+if [ ${#ROW_EPOCH[@]} -gt 0 ]; then
   while read -r idx; do
-    printf "  ${CYAN}%d)${RESET} %-40s ${DIM}%s${RESET}" "$num" "${ROW_NAME[$idx]}" "${ROW_AGE[$idx]}"
-    [ "${ROW_STATUS[$idx]}" = "dirty" ] && printf "  ${BOLD}*${RESET}"
-    echo ""
-    SNAPSHOT="${SNAPSHOT}\nWORKTREE: #${num} ${ROW_NAME[$idx]} | ${ROW_MSG[$idx]} | ${ROW_AGE[$idx]} | ${ROW_STATUS[$idx]} | ${PROJECT_DIR}/${ROW_NAME[$idx]}/"
-    num=$((num + 1))
-  done <<< "$sorted"
+    SORTED_NAMES+=("${ROW_NAME[$idx]}")
+    SORTED_PATHS+=("${ROW_PATH[$idx]}")
+    SORTED_AGES+=("${ROW_AGE[$idx]}")
+    SORTED_STATUSES+=("${ROW_STATUS[$idx]}")
+  done < <(for i in "${!ROW_EPOCH[@]}"; do echo "${ROW_EPOCH[$i]} $i"; done | sort -rn | awk '{print $2}')
 fi
 
+# --- If branch passed as arg, jump directly ---
+TARGET_PATH=""
+TARGET_NAME=""
+
+if [ $# -ge 1 ]; then
+  branch_arg="$1"
+  candidate="$PROJECT_DIR/$branch_arg"
+  if [ -d "$candidate" ] && [ -e "$candidate/.git" ]; then
+    TARGET_PATH="$candidate"
+    TARGET_NAME="$branch_arg"
+  else
+    printf "\033[31mBranch not found: %s\033[0m\n" "$branch_arg"
+    return 2>/dev/null || exit 1
+  fi
+fi
+
+# --- If only one branch and no arg, jump directly ---
+if [ -z "$TARGET_PATH" ] && [ ${#SORTED_NAMES[@]} -eq 1 ]; then
+  TARGET_PATH="${SORTED_PATHS[0]}"
+  TARGET_NAME="${SORTED_NAMES[0]}"
+fi
+
+# --- Otherwise show menu and prompt ---
+if [ -z "$TARGET_PATH" ]; then
+  echo ""
+  printf "${BOLD}${PROJECT_ALIAS}${RESET}  ${DIM}${PROJECT_REPO}${RESET}\n"
+  echo ""
+
+  if [ ${#SORTED_NAMES[@]} -eq 0 ]; then
+    printf "  ${DIM}No branches yet.${RESET}\n"
+    echo ""
+    return 2>/dev/null || exit 0
+  fi
+
+  for i in "${!SORTED_NAMES[@]}"; do
+    num=$((i + 1))
+    printf "  ${CYAN}%d)${RESET} %-40s ${DIM}%s${RESET}" "$num" "${SORTED_NAMES[$i]}" "${SORTED_AGES[$i]}"
+    [ "${SORTED_STATUSES[$i]}" = "dirty" ] && printf "  ${BOLD}*${RESET}"
+    echo ""
+  done
+
+  echo ""
+  printf "Pick branch [1-%d]: " "${#SORTED_NAMES[@]}"
+  read -r branch_choice
+
+  if [[ "$branch_choice" =~ ^[0-9]+$ ]] && [ "$branch_choice" -ge 1 ] && [ "$branch_choice" -le "${#SORTED_NAMES[@]}" ]; then
+    idx=$((branch_choice - 1))
+    TARGET_PATH="${SORTED_PATHS[$idx]}"
+    TARGET_NAME="${SORTED_NAMES[$idx]}"
+  elif [ -d "$PROJECT_DIR/$branch_choice" ] && [ -e "$PROJECT_DIR/$branch_choice/.git" ]; then
+    TARGET_PATH="$PROJECT_DIR/$branch_choice"
+    TARGET_NAME="$branch_choice"
+  else
+    echo "Invalid selection."
+    return 2>/dev/null || exit 1
+  fi
+fi
+
+# --- Jump there and launch Claude ---
 echo ""
-printf "${DIM}Tell Claude what you want to do...${RESET}\n"
+printf "${DIM}→ %s${RESET}\n" "$TARGET_PATH"
 echo ""
 
-# --- Launch Claude with context ---
-cd "$YOLO2_DIR"
-claude --dangerously-skip-permissions --model sonnet --append-system-prompt "$(printf "The user just saw branches for project '${PROJECT_ALIAS}' printed by bash. Do NOT reprint the list. Just respond to whatever they say next.\n\n${SNAPSHOT}")" "$@"
+cd "$TARGET_PATH"
+claude --dangerously-skip-permissions --model sonnet
