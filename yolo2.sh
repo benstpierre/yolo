@@ -29,6 +29,36 @@ while IFS='|' read -r alias repo dir; do
   P_DIRS+=("$dir")
 done < "$CONF"
 
+# --- Project history (tracks last-used time per alias) ---
+HISTORY_FILE="$YOLO2_DIR/.project_history"
+
+_yolo2_record_project() {
+  local a="$1"
+  local epoch
+  epoch=$(date +%s)
+  local tmp
+  tmp=$(mktemp)
+  grep -v "^${a}|" "$HISTORY_FILE" 2>/dev/null > "$tmp" || true
+  echo "${a}|${epoch}" >> "$tmp"
+  mv "$tmp" "$HISTORY_FILE"
+}
+
+_yolo2_last_used() {
+  local a="$1"
+  grep "^${a}|" "$HISTORY_FILE" 2>/dev/null | cut -d'|' -f2 || echo "0"
+}
+
+# Build display order: sort project indices by last-used desc
+declare -a P_DISPLAY_ORDER=()
+while read -r idx; do
+  P_DISPLAY_ORDER+=("$idx")
+done < <(
+  for i in "${!P_ALIASES[@]}"; do
+    lu=$(_yolo2_last_used "${P_ALIASES[$i]}")
+    echo "$lu ${P_REPOS[$i]} $i"
+  done | sort -k1,1rn -k2,2 | awk '{print $NF}'
+)
+
 # --- Resolve project ---
 PROJECT_ALIAS=""
 PROJECT_REPO=""
@@ -40,22 +70,24 @@ if [ $# -ge 1 ]; then
       PROJECT_ALIAS="${P_ALIASES[$idx]}"
       PROJECT_REPO="${P_REPOS[$idx]}"
       PROJECT_DIR="${P_DIRS[$idx]}"
+      _yolo2_record_project "$PROJECT_ALIAS"
       shift
       break
     fi
   done
   if [ -z "$PROJECT_ALIAS" ]; then
     printf "\033[31mUnknown project: %s\033[0m\n" "$1"
-    printf "Known projects: %s\n" "${P_ALIASES[*]}"
+    printf "Known projects: %s\n" "${P_REPOS[*]}"
     return 2>/dev/null || exit 1
   fi
 else
   echo ""
   printf "${BOLD}yolo2 — pick a project${RESET}\n"
   echo ""
-  for idx in "${!P_ALIASES[@]}"; do
-    num=$((idx + 1))
-    printf "  ${CYAN}%d)${RESET} ${BOLD}%-6s${RESET} ${DIM}%s${RESET}\n" "$num" "${P_ALIASES[$idx]}" "${P_REPOS[$idx]}"
+  num=1
+  for idx in "${P_DISPLAY_ORDER[@]}"; do
+    printf "  ${CYAN}%d)${RESET} ${DIM}%s${RESET}\n" "$num" "${P_REPOS[$idx]}"
+    num=$((num + 1))
   done
   echo ""
   printf "Pick [1-%d]: " "${#P_ALIASES[@]}"
@@ -66,10 +98,12 @@ else
     return 2>/dev/null || exit 1
   fi
 
-  pick=$((proj_choice - 1))
+  pick_display=$((proj_choice - 1))
+  pick="${P_DISPLAY_ORDER[$pick_display]}"
   PROJECT_ALIAS="${P_ALIASES[$pick]}"
   PROJECT_REPO="${P_REPOS[$pick]}"
   PROJECT_DIR="${P_DIRS[$pick]}"
+  _yolo2_record_project "$PROJECT_ALIAS"
 fi
 
 # --- Gather worktrees for this project ---
