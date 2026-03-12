@@ -212,4 +212,7 @@ printf "${DIM}→ %s${RESET}\n" "$TARGET_PATH"
 echo ""
 
 cd "$TARGET_PATH"
-claude --dangerously-skip-permissions --model sonnet
+claude --dangerously-skip-permissions --model sonnet || true
+# Re-cd after claude exits (including Ctrl+C) so the shell lands here
+cd "$TARGET_PATH"
+printf "${DIM}pwd: %s${RESET}\n" "$TARGET_PATH"
