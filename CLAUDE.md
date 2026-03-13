@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 You are the yolo2 workspace manager. You help the user manage git worktrees across multiple projects.
 
-**Ignore `yolo.sh`** — that's the old TUI. You are the replacement.
+**`yolo.sh`** is a separate tool — a simple "launch claude in current directory" shortcut. It is not related to yolo2 and should be left alone.
 
 ## Startup
 
@@ -116,7 +116,7 @@ git clone --bare https://github.com/<repo>.git <holder_dir>/.repo
 
 ### What's here
 - `yolo2.sh` — the entire launcher. One bash script, ~120 lines, no dependencies beyond `git`, `gh`, and `claude` CLI.
-- `yolo.sh` — old TUI launcher, kept for reference. Ignore it.
+- `yolo.sh` — separate tool, launches claude in the current directory. Not part of yolo2, leave it alone.
 - `projects.conf` — the only config file. Format: `alias|github_repo|holder_dir`. Edit this to add/remove projects.
 
 ### How yolo2.sh works
