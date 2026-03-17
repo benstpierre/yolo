@@ -177,9 +177,8 @@ if [ -z "$TARGET_PATH" ]; then
   echo ""
 
   if [ ${#SORTED_NAMES[@]} -eq 0 ]; then
-    printf "  ${DIM}No branches yet.${RESET}\n"
+    printf "  ${DIM}No branches yet. Press Enter to open workspace manager.${RESET}\n"
     echo ""
-    return 2>/dev/null || exit 0
   fi
 
   for i in "${!SORTED_NAMES[@]}"; do
@@ -190,10 +189,53 @@ if [ -z "$TARGET_PATH" ]; then
   done
 
   echo ""
-  printf "Pick branch [1-%d]: " "${#SORTED_NAMES[@]}"
+  if [ ${#SORTED_NAMES[@]} -eq 0 ]; then
+    printf "Press Enter for workspace manager: "
+  else
+    printf "Pick branch [1-%d] or Enter for workspace manager: " "${#SORTED_NAMES[@]}"
+  fi
   read -r branch_choice
 
-  if [[ "$branch_choice" =~ ^[0-9]+$ ]] && [ "$branch_choice" -ge 1 ] && [ "$branch_choice" -le "${#SORTED_NAMES[@]}" ]; then
+  if [ -z "$branch_choice" ]; then
+    # --- Launch Claude as workspace manager in the holder dir ---
+    SNAPSHOT="You are the yolo2 workspace manager for this project.
+
+Project: ${PROJECT_ALIAS} (${PROJECT_REPO})
+Holder dir: ${PROJECT_DIR}
+Bare repo: ${PROJECT_DIR}/.repo
+
+Current worktrees (sorted by last commit):
+"
+    for i in "${!SORTED_NAMES[@]}"; do
+      num=$((i + 1))
+      status_str=""
+      [ "${SORTED_STATUSES[$i]}" = "dirty" ] && status_str="  *dirty*"
+      SNAPSHOT+="  ${num}) ${SORTED_NAMES[$i]}  (${SORTED_AGES[$i]})${status_str}
+"
+    done
+    SNAPSHOT+="
+The user may give you anything: an issue number, a GitHub issue/PR URL, a branch name, natural language like 'branch off X' or 'clean up old stuff'. Handle it.
+
+Key commands for this project:
+  Create worktree from issue:  gh issue view <N> --repo ${PROJECT_REPO} --json title -q .title
+                               git -C ${PROJECT_DIR}/.repo fetch origin main:refs/remotes/origin/main
+                               git -C ${PROJECT_DIR}/.repo worktree add ${PROJECT_DIR}/<branch> -b <branch> main
+  Create from existing branch: git -C ${PROJECT_DIR}/.repo fetch origin
+                               git -C ${PROJECT_DIR}/.repo worktree add ${PROJECT_DIR}/<branch> <branch>
+  Remove worktree:             git -C ${PROJECT_DIR}/.repo worktree remove ${PROJECT_DIR}/<branch> --force
+  Delete branch:               git -C ${PROJECT_DIR}/.repo branch -D <branch>
+  Check PR merged:             gh pr list --head <branch> -R ${PROJECT_REPO} --state merged
+  After creating, cd into the new worktree path and tell the user you're ready."
+
+    echo ""
+    printf "${DIM}→ workspace manager: %s${RESET}\n" "$PROJECT_DIR"
+    echo ""
+    cd "$PROJECT_DIR"
+    claude --dangerously-skip-permissions --model sonnet --append-system-prompt "$SNAPSHOT" || true
+    cd "$PROJECT_DIR"
+    printf "${DIM}pwd: %s${RESET}\n" "$PROJECT_DIR"
+    return 2>/dev/null || exit 0
+  elif [[ "$branch_choice" =~ ^[0-9]+$ ]] && [ "$branch_choice" -ge 1 ] && [ "$branch_choice" -le "${#SORTED_NAMES[@]}" ]; then
     idx=$((branch_choice - 1))
     TARGET_PATH="${SORTED_PATHS[$idx]}"
     TARGET_NAME="${SORTED_NAMES[$idx]}"
