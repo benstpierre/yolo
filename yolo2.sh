@@ -164,12 +164,6 @@ if [ $# -ge 1 ]; then
   fi
 fi
 
-# --- If only one branch and no arg, jump directly ---
-if [ -z "$TARGET_PATH" ] && [ ${#SORTED_NAMES[@]} -eq 1 ]; then
-  TARGET_PATH="${SORTED_PATHS[0]}"
-  TARGET_NAME="${SORTED_NAMES[0]}"
-fi
-
 # --- Otherwise show menu and prompt ---
 if [ -z "$TARGET_PATH" ]; then
   echo ""
@@ -231,7 +225,7 @@ Key commands for this project:
     printf "${DIM}→ workspace manager: %s${RESET}\n" "$PROJECT_DIR"
     echo ""
     cd "$PROJECT_DIR"
-    claude --dangerously-skip-permissions --model sonnet --append-system-prompt "$SNAPSHOT" || true
+    claude --dangerously-skip-permissions --append-system-prompt "$SNAPSHOT" || true
     cd "$PROJECT_DIR"
     printf "${DIM}pwd: %s${RESET}\n" "$PROJECT_DIR"
     return 2>/dev/null || exit 0
@@ -254,7 +248,7 @@ printf "${DIM}→ %s${RESET}\n" "$TARGET_PATH"
 echo ""
 
 cd "$TARGET_PATH"
-claude --dangerously-skip-permissions --model sonnet || true
+claude --dangerously-skip-permissions || true
 # Re-cd after claude exits (including Ctrl+C) so the shell lands here
 cd "$TARGET_PATH"
 printf "${DIM}pwd: %s${RESET}\n" "$TARGET_PATH"
