@@ -66,7 +66,7 @@ else
 
   if [ -z "$proj_choice" ]; then
     printf "\nLaunching Codex in ${BOLD}%s${RESET}...\n" "$(pwd)"
-    codex --dangerously-bypass-approvals-and-sandbox "$@"
+    codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox "$@"
     return 2>/dev/null || exit 0
   fi
 
@@ -223,7 +223,7 @@ case "$choice" in
       pick_idx="${SORTED_INDICES[$pick_pos]}"
       printf "\nLaunching Codex in ${BOLD}%s/${RESET}...\n" "${WT_NAMES[$pick_idx]}"
       cd "${WT_DIRS[$pick_idx]}"
-      codex --dangerously-bypass-approvals-and-sandbox "$@"
+      codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox "$@"
       return 2>/dev/null || exit 0
     fi
 
@@ -242,7 +242,7 @@ case "$choice" in
       printf "\nFound existing branch: ${BOLD}%s${RESET}\n" "${WT_NAMES[$_found_idx]}"
       printf "Launching Codex in ${BOLD}%s/${RESET}...\n" "${WT_NAMES[$_found_idx]}"
       cd "${WT_DIRS[$_found_idx]}"
-      codex --dangerously-bypass-approvals-and-sandbox "$@"
+      codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox "$@"
       return 2>/dev/null || exit 0
     fi
 
@@ -260,7 +260,7 @@ case "$choice" in
       printf "${GREEN}Done ✓${RESET}\n\n"
       printf "Launching Codex in ${BOLD}%s/${RESET}...\n" "$_existing_branch"
       cd "$PROJECT_DIR/$_existing_branch"
-      codex --dangerously-bypass-approvals-and-sandbox "$@"
+      codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox "$@"
       return 2>/dev/null || exit 0
     fi
 
@@ -299,6 +299,6 @@ case "$choice" in
     printf "${GREEN}Done ✓${RESET}\n\n"
     printf "Launching Codex in ${BOLD}%s/${RESET}...\n" "$_branch"
     cd "$PROJECT_DIR/$_branch"
-    codex --dangerously-bypass-approvals-and-sandbox "$@"
+    codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox "$@"
     ;;
 esac
