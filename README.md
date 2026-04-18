@@ -4,19 +4,19 @@ Terminal launcher for managing multi-project git worktrees with [Claude Code](ht
 
 ## Setup
 
-1. Clone this repo:
+1. Clone this repo wherever you like (e.g. `~/code/yolo`):
    ```bash
-   git clone https://github.com/benstpierre/yolo.git /usr/local/code/claude-native/yolo
+   git clone https://github.com/benstpierre/yolo.git ~/code/yolo
    ```
 
-2. Add to your `~/.bash_profile`:
+2. Add to your `~/.bash_profile` (adjust the path to match where you cloned):
    ```bash
    yolo() {
      if [ -z "$ITERM_SESSION_ID" ]; then
        echo "Not in iTerm2. Refusing to yolo."
        return 1
      fi
-     source "/usr/local/code/claude-native/yolo/yolo.sh" "$@"
+     source "$HOME/code/yolo/yolo.sh" "$@"
    }
    ```
 

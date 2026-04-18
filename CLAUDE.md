@@ -140,6 +140,6 @@ Projects use `<holder_dir>/.repo` as a bare clone. Worktrees live directly insid
 
 ### Shell function (user's ~/.bash_profile)
 ```bash
-yolo2() { source "/usr/local/code/claude-native/yolo-holder/main/yolo2.sh" "$@"; }
+yolo2() { source "$YOLO_HOLDER/main/yolo2.sh" "$@"; }  # $YOLO_HOLDER = wherever you put the yolo-holder dir
 ```
 Must be `source`d (not executed) because it calls `cd` to change the user's working directory.

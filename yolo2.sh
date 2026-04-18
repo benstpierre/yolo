@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # yolo2 — jump to a project worktree and launch Claude there.
 #
-# Add to ~/.bash_profile:
-#   yolo2() { source "/usr/local/code/claude-native/yolo-holder/main/yolo2.sh" "$@"; }
+# Add to ~/.bash_profile (adjust path to where you cloned yolo-holder):
+#   yolo2() { source "$HOME/code/yolo-holder/main/yolo2.sh" "$@"; }
 #
 # Usage:
 #   yolo2              → pick project, then pick branch
