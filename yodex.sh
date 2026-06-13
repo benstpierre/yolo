@@ -15,6 +15,50 @@ YELLOW='\033[33m'
 RED='\033[31m'
 RESET='\033[0m'
 
+_yodex_normalize_choice() {
+  local choice="$1"
+  choice=$(printf '%s' "$choice" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
+  choice="${choice//\\/}"
+  choice="${choice#\#}"
+  choice=$(printf '%s' "$choice" | sed 's/^remove[[:space:]]*/rm/; s/^delete[[:space:]]*/rm/; s/^rm[[:space:]]*/rm/')
+  printf '%s' "$choice"
+}
+
+_yodex_default_branch_name() {
+  local branch
+  branch=$(git -C "$BARE_REPO" symbolic-ref --quiet --short refs/remotes/origin/HEAD 2>/dev/null)
+  branch="${branch#origin/}"
+  if [ -z "$branch" ]; then
+    branch=$(git -C "$BARE_REPO" symbolic-ref --quiet --short HEAD 2>/dev/null)
+    branch="${branch#refs/heads/}"
+  fi
+  printf '%s' "${branch:-main}"
+}
+
+_yodex_find_worktree_idx() {
+  local branch="$1"
+  local i
+  for i in "${!WT_NAMES[@]}"; do
+    if [ "${WT_NAMES[$i]}" = "$branch" ]; then
+      printf '%s' "$i"
+      return 0
+    fi
+  done
+  return 1
+}
+
+_yodex_launch_codex() {
+  local dir="$1"
+  local name="$2"
+  shift 2
+  printf "\nLaunching Codex in ${BOLD}%s/${RESET}...\n" "$name"
+  cd "$dir" || {
+    printf "${RED}Failed to enter %s${RESET}\n" "$dir"
+    return 1
+  }
+  codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox "$@"
+}
+
 # --- Read projects.conf ---
 declare -a P_ALIASES=()
 declare -a P_REPOS=()
@@ -61,24 +105,32 @@ else
   done
 
   echo ""
-  printf "Pick [1-%d] or Enter for pwd: " "${#P_ALIASES[@]}"
-  read -r proj_choice
+  while true; do
+    printf "Pick [1-%d] or Enter for pwd: " "${#P_ALIASES[@]}"
+    read -r proj_choice || {
+      echo ""
+      return 2>/dev/null || exit 1
+    }
+    proj_choice=$(_yodex_normalize_choice "$proj_choice")
 
-  if [ -z "$proj_choice" ]; then
-    printf "\nLaunching Codex in ${BOLD}%s${RESET}...\n" "$(pwd)"
-    codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox "$@"
-    return 2>/dev/null || exit 0
-  fi
+    if [ -z "$proj_choice" ]; then
+      printf "\nLaunching Codex in ${BOLD}%s${RESET}...\n" "$(pwd)"
+      codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox "$@"
+      _yodex_status=$?
+      return "$_yodex_status" 2>/dev/null || exit "$_yodex_status"
+    fi
 
-  if ! [[ "$proj_choice" =~ ^[0-9]+$ ]] || [ "$proj_choice" -lt 1 ] || [ "$proj_choice" -gt "${#P_ALIASES[@]}" ]; then
-    echo "Invalid selection."
-    return 2>/dev/null || exit 1
-  fi
+    if ! [[ "$proj_choice" =~ ^[0-9]+$ ]] || [ "$proj_choice" -lt 1 ] || [ "$proj_choice" -gt "${#P_ALIASES[@]}" ]; then
+      echo "Invalid selection."
+      continue
+    fi
 
-  pick=$((proj_choice - 1))
-  PROJECT_ALIAS="${P_ALIASES[$pick]}"
-  PROJECT_REPO="${P_REPOS[$pick]}"
-  PROJECT_DIR="${P_DIRS[$pick]}"
+    pick=$((proj_choice - 1))
+    PROJECT_ALIAS="${P_ALIASES[$pick]}"
+    PROJECT_REPO="${P_REPOS[$pick]}"
+    PROJECT_DIR="${P_DIRS[$pick]}"
+    break
+  done
 fi
 
 # --- First-time setup: bare clone if needed ---
@@ -148,36 +200,60 @@ echo ""
 
 # --- Prompt ---
 max=${#WT_DIRS[@]}
+DEFAULT_BRANCH=""
+DEFAULT_IDX=""
 if [ "$max" -gt 0 ]; then
-  printf "Pick [1-%d], issue #, or rm: " "$max"
-else
-  printf "Pick issue # or i: "
+  DEFAULT_BRANCH=$(_yodex_default_branch_name)
+  DEFAULT_IDX=$(_yodex_find_worktree_idx "$DEFAULT_BRANCH" || true)
 fi
-read -r choice
 
-# Normalize whitespace and lowercase
-choice=$(echo "$choice" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' | tr '[:upper:]' '[:lower:]')
-# Strip leading # (e.g. "#9999" → "9999")
-choice="${choice#\#}"
-# "remove 12" / "rm 12" / "delete 12" → "rm12"
-choice=$(echo "$choice" | sed 's/^remove[[:space:]]*/rm/; s/^delete[[:space:]]*/rm/; s/^rm[[:space:]]*/rm/')
-
-# --- "i" means prompt for issue number, then treat same as typing the number ---
-if [ "$choice" = "i" ]; then
-  printf "Issue number: "
-  read -r choice
-  if [ -z "$choice" ]; then
-    echo "No issue number provided."
-    return 2>/dev/null || exit 1
+while true; do
+  if [ "$max" -gt 0 ]; then
+    if [ -n "$DEFAULT_IDX" ]; then
+      printf "Pick [1-%d], issue #, rm, or Enter for %s: " "$max" "$DEFAULT_BRANCH"
+    else
+      printf "Pick [1-%d], issue #, or rm: " "$max"
+    fi
+  else
+    printf "Pick issue # or i: "
   fi
-fi
+  read -r choice || {
+    echo ""
+    return 2>/dev/null || exit 1
+  }
+  choice=$(_yodex_normalize_choice "$choice")
 
-case "$choice" in
+  if [ -z "$choice" ]; then
+    if [ -n "$DEFAULT_IDX" ]; then
+      _yodex_launch_codex "${WT_DIRS[$DEFAULT_IDX]}" "${WT_NAMES[$DEFAULT_IDX]}" "$@"
+      _yodex_status=$?
+      return "$_yodex_status" 2>/dev/null || exit "$_yodex_status"
+    fi
+
+    echo "Invalid selection."
+    continue
+  fi
+
+  # --- "i" means prompt for issue number, then treat same as typing the number ---
+  if [ "$choice" = "i" ]; then
+    printf "Issue number: "
+    read -r choice || {
+      echo ""
+      return 2>/dev/null || exit 1
+    }
+    choice=$(_yodex_normalize_choice "$choice")
+    if [ -z "$choice" ]; then
+      echo "No issue number provided."
+      continue
+    fi
+  fi
+
+  case "$choice" in
   # --- Remove a branch (rm, rm5, remove 12, delete 3, etc.) ---
   rm*)
     if [ "$max" -eq 0 ]; then
       echo "No branches to delete."
-      return 2>/dev/null || exit 1
+      continue
     fi
 
     del_num="${choice#rm}"
@@ -185,12 +261,16 @@ case "$choice" in
     if [ -z "$del_num" ]; then
       # Bare "rm" — ask which one
       printf "Remove which branch? [1-%d]: " "$max"
-      read -r del_num
+      read -r del_num || {
+        echo ""
+        return 2>/dev/null || exit 1
+      }
+      del_num=$(_yodex_normalize_choice "$del_num")
     fi
 
     if ! [[ "$del_num" =~ ^[0-9]+$ ]] || [ "$del_num" -lt 1 ] || [ "$del_num" -gt "$max" ]; then
       echo "Invalid selection."
-      return 2>/dev/null || exit 1
+      continue
     fi
 
     del_pos=$((del_num - 1))
@@ -214,17 +294,16 @@ case "$choice" in
   *)
     if ! [[ "$choice" =~ ^[0-9]+$ ]]; then
       echo "Invalid selection."
-      return 2>/dev/null || exit 1
+      continue
     fi
 
     # 1) If it's a valid menu pick (1..max), use it
     if [ "$max" -gt 0 ] && [ "$choice" -ge 1 ] && [ "$choice" -le "$max" ]; then
       pick_pos=$((choice - 1))
       pick_idx="${SORTED_INDICES[$pick_pos]}"
-      printf "\nLaunching Codex in ${BOLD}%s/${RESET}...\n" "${WT_NAMES[$pick_idx]}"
-      cd "${WT_DIRS[$pick_idx]}"
-      codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox "$@"
-      return 2>/dev/null || exit 0
+      _yodex_launch_codex "${WT_DIRS[$pick_idx]}" "${WT_NAMES[$pick_idx]}" "$@"
+      _yodex_status=$?
+      return "$_yodex_status" 2>/dev/null || exit "$_yodex_status"
     fi
 
     # 2) Check if an existing worktree starts with this number
@@ -240,10 +319,9 @@ case "$choice" in
 
     if [ -n "$_found_idx" ]; then
       printf "\nFound existing branch: ${BOLD}%s${RESET}\n" "${WT_NAMES[$_found_idx]}"
-      printf "Launching Codex in ${BOLD}%s/${RESET}...\n" "${WT_NAMES[$_found_idx]}"
-      cd "${WT_DIRS[$_found_idx]}"
-      codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox "$@"
-      return 2>/dev/null || exit 0
+      _yodex_launch_codex "${WT_DIRS[$_found_idx]}" "${WT_NAMES[$_found_idx]}" "$@"
+      _yodex_status=$?
+      return "$_yodex_status" 2>/dev/null || exit "$_yodex_status"
     fi
 
     # 3) No existing worktree — check if branch already exists in bare repo
@@ -258,10 +336,9 @@ case "$choice" in
         return 2>/dev/null || exit 1
       }
       printf "${GREEN}Done ✓${RESET}\n\n"
-      printf "Launching Codex in ${BOLD}%s/${RESET}...\n" "$_existing_branch"
-      cd "$PROJECT_DIR/$_existing_branch"
-      codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox "$@"
-      return 2>/dev/null || exit 0
+      _yodex_launch_codex "$PROJECT_DIR/$_existing_branch" "$_existing_branch" "$@"
+      _yodex_status=$?
+      return "$_yodex_status" 2>/dev/null || exit "$_yodex_status"
     fi
 
     # 4) No branch at all — fetch GitHub issue and create new branch
@@ -270,7 +347,7 @@ case "$choice" in
 
     if [ -z "$_title" ]; then
       printf "\n${RED}Could not fetch issue #%s from %s${RESET}\n" "$choice" "$PROJECT_REPO"
-      return 2>/dev/null || exit 1
+      continue
     fi
 
     printf "\"${BOLD}%s${RESET}\"\n" "$_title"
@@ -283,22 +360,25 @@ case "$choice" in
     echo ""
     printf "Creating branch: ${BOLD}%s${RESET}\n" "$_branch"
 
-    # Fetch latest default branch
+    # Fetch the remote-tracking default branch. Updating the local default
+    # branch fails when it is checked out in another worktree.
     _default=$(git -C "$BARE_REPO" remote show origin 2>/dev/null | sed -n 's/.*HEAD branch: //p')
     _default="${_default:-main}"
-    git -C "$BARE_REPO" fetch origin "$_default:$_default" || {
+    _base_ref="origin/$_default"
+    git -C "$BARE_REPO" fetch origin "$_default:refs/remotes/origin/$_default" || {
       printf "\n${RED}Failed to fetch origin/%s${RESET}\n" "$_default"
       return 2>/dev/null || exit 1
     }
 
-    git -C "$BARE_REPO" worktree add "$PROJECT_DIR/$_branch" -b "$_branch" "$_default" || {
+    git -C "$BARE_REPO" worktree add "$PROJECT_DIR/$_branch" -b "$_branch" "$_base_ref" || {
       printf "\n${RED}Failed to create worktree${RESET}\n"
       return 2>/dev/null || exit 1
     }
 
     printf "${GREEN}Done ✓${RESET}\n\n"
-    printf "Launching Codex in ${BOLD}%s/${RESET}...\n" "$_branch"
-    cd "$PROJECT_DIR/$_branch"
-    codex --no-alt-screen --dangerously-bypass-approvals-and-sandbox "$@"
+    _yodex_launch_codex "$PROJECT_DIR/$_branch" "$_branch" "$@"
+    _yodex_status=$?
+    return "$_yodex_status" 2>/dev/null || exit "$_yodex_status"
     ;;
-esac
+  esac
+done
